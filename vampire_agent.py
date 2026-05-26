@@ -120,11 +120,13 @@ def print_character_status(char):
     
     # Fill aggravated
     for i in range(char["aggravated_damage"]):
-        if i < len(health_boxes): health_boxes[i] = "[X]"
+        if i < len(health_boxes):
+            health_boxes[i] = "[X]"
     # Fill superficial
     for i in range(char["superficial_damage"]):
         idx = char["aggravated_damage"] + i
-        if idx < len(health_boxes): health_boxes[idx] = "[/]"
+        if idx < len(health_boxes):
+            health_boxes[idx] = "[/]"
         
     health_str = "".join(health_boxes)
     will_boxes = ["[X]"] * char["willpower_damage"] + ["[ ]"] * (char["max_willpower"] - char["willpower_damage"])
@@ -281,9 +283,12 @@ def main():
             result = roll_vampire(pool, hunger)
             
             print(f"[Resultado]: {result['successes']} éxitos.")
-            if result['critical']: print("¡Éxito Crítico! 🌟")
-            if result['messy_critical']: print("¡Crítico Desordenado! 🩸")
-            if result['bestial_failure']: print("¡Pifia Bestial! 💀")
+            if result['critical']:
+                print("¡Éxito Crítico! 🌟")
+            if result['messy_critical']:
+                print("¡Crítico Desordenado! 🩸")
+            if result['bestial_failure']:
+                print("¡Pifia Bestial! 💀")
             print(f"Dados normales: {result['normal_dice']} | Dados de hambre: {result['hunger_dice']}\n")
             
             follow_up = f"Resultado real del motor de dados: {json.dumps(result)}\nContinúa la narración con estas consecuencias."
