@@ -9,31 +9,205 @@ import requests
 CHARACTER_FILE = "character_sheet.json"
 
 DEFAULT_CHARACTER = {
-    "name": "Luis",
+    "name": "generate randomly",  # El nombre se generará aleatoriamente al iniciar la primera vez
     "clan": "Desconocido",
-    "max_health": 17,
+    "max_health": 10,
     "superficial_damage": 0,
     "aggravated_damage": 0,
-    "max_willpower": 5,
+    "max_willpower": "generate randomly between 5 and 8",
     "willpower_damage": 0,
     "hunger": 1,
-    "humanity": 7,
+    "humanity": "generate randomly between 2 and 7",  # Se generará aleatoriamente entre 1-10 al iniciar la primera vez
     "objectives": [],  # Objetivos narrativos del personaje
     "secrets": [],     # Secretos/misterios del personaje
     "relationships": {},  # PNJs y relaciones con ellos
-    "current_location": "Desconocido",
-    "current_situation": "Recién despertado",
+    "current_location": "unknown",
+    "current_situation": "generate a situation based on the campaign context ",  # Se generará una situación inicial basada en el contexto de la campaña o comenzará con "En las sombras..."
     "narrative_history": [],  # Registro de eventos significativos
 }
+
+RANDOM_NAMES = [
+    "Ariadna",
+    "Mateo",
+    "Diana",
+    "Sergio",
+    "Valeria",
+    "Iker",
+    "Nora",
+    "Tomás",
+    "Lucía",
+    "Rafael",
+]
+
+RANDOM_CLANS = [
+    "Brujah",
+    "Ventrue",
+    "Toreador",
+    "Nosferatu",
+    "Malkavian",
+    "Gangrel",
+    "Lasombra",
+    "Banu Haqim",
+    "Tremere",
+    "Ravnos",
+]
+
+
+def is_random_placeholder(value):
+    if not isinstance(value, str):
+        return False
+    low = value.lower().strip()
+    return low.startswith("generate") or ("generate" in low and "random" in low)
+
+
+def resolve_random_placeholder(key, value, campaign_text="", fallback_name=None):
+    if not isinstance(value, str):
+        return value
+
+    low = value.lower()
+    between_match = re.search(r"between\s+(\d+)\s+and\s+(\d+)", low)
+    if between_match:
+        lo = int(between_match.group(1))
+        hi = int(between_match.group(2))
+        if lo > hi:
+            lo, hi = hi, lo
+        return random.randint(lo, hi)
+
+    if key == "name" and "generate randomly" in low:
+        return fallback_name or random.choice(RANDOM_NAMES)
+
+    if key == "clan" and ("desconocido" in low or "generate randomly" in low):
+        return random.choice(RANDOM_CLANS)
+
+    if key == "current_situation" and "generate" in low:
+        return generate_campaign_situation(campaign_text)
+
+    return value
+
+
+def materialize_character_template(template, campaign_text="", fallback_name=None):
+    resolved = {}
+    for key, value in template.items():
+        if isinstance(value, dict):
+            resolved[key] = materialize_character_template(value, campaign_text, fallback_name)
+        elif isinstance(value, list):
+            resolved[key] = list(value)
+        elif is_random_placeholder(value):
+            resolved[key] = resolve_random_placeholder(key, value, campaign_text, fallback_name)
+        else:
+            resolved[key] = value
+
+    if resolved.get("name") == "generate randomly":
+        resolved["name"] = fallback_name or random.choice(RANDOM_NAMES)
+    if resolved.get("clan") == "Desconocido":
+        resolved["clan"] = random.choice(RANDOM_CLANS)
+    return resolved
+
+
+def generate_campaign_situation(campaign_text=""):
+    campaign_low = campaign_text.lower()
+    if "chicago" in campaign_low:
+        return "Noche lluviosa en Chicago. Una figura te observa desde la acera opuesta."
+    if "mexico" in campaign_low or "méxico" in campaign_low:
+        return "Bajo las luces de neón, un rumor de traición recorre la ciudad."
+    return "En las sombras... alguien sabe tu nombre antes de que hables."
+
+
+def ensure_character_integrity(character, campaign_text=""):
+    merged = DEFAULT_CHARACTER.copy()
+    merged.update(character)
+
+    for key, value in list(merged.items()):
+        if is_random_placeholder(value):
+            merged[key] = resolve_random_placeholder(key, value, campaign_text)
+
+    if merged.get("name") in (None, "", "generate randomly"):
+        merged["name"] = random.choice(RANDOM_NAMES)
+    if merged.get("clan") in (None, "", "Desconocido"):
+        merged["clan"] = random.choice(RANDOM_CLANS)
+
+    merged["max_health"] = int(merged.get("max_health", 10))
+    merged["max_willpower"] = int(merged.get("max_willpower", 5))
+    merged["hunger"] = max(0, min(5, int(merged.get("hunger", 1))))
+    merged["humanity"] = max(1, min(10, int(merged.get("humanity", 7))))
+
+    merged.setdefault("objectives", [])
+    merged.setdefault("secrets", [])
+    merged.setdefault("relationships", {})
+    merged.setdefault("current_location", "unknown")
+    if not merged.get("current_situation"):
+        merged["current_situation"] = generate_campaign_situation(campaign_text)
+    merged.setdefault("narrative_history", [])
+    return merged
+
+
+def extract_interaction_target(user_input):
+    quoted_match = re.search(r'"([^"]{2,40})"', user_input)
+    if quoted_match:
+        return quoted_match.group(1).strip()
+
+    generic_match = re.search(
+        r"(?:interactu(?:o|úo)|hablo|converso|negocio|interrogo|amenazo|ataco|observo|me acerco)\s+(?:con\s+)?(?:el|la|un|una)?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ'\- ]{3,40})",
+        user_input,
+        re.IGNORECASE,
+    )
+    if generic_match:
+        raw = generic_match.group(1)
+        cleaned = re.split(r"[\.,;:!?]", raw)[0].strip()
+        if cleaned:
+            return cleaned.title()
+    return None
+
+
+def get_or_create_interaction_character(player_character, target_name, campaign_text=""):
+    relationships = player_character.setdefault("relationships", {})
+    key = target_name.strip().lower()
+    existing = relationships.get(key)
+    if isinstance(existing, dict) and existing.get("name"):
+        return existing
+
+    npc_template = materialize_character_template(
+        DEFAULT_CHARACTER,
+        campaign_text=campaign_text,
+        fallback_name=target_name,
+    )
+    npc_template["name"] = target_name
+    npc_template["current_location"] = player_character.get("current_location", "unknown")
+    npc_template["current_situation"] = (
+        f"Interactuando con {player_character.get('name', 'el jugador')} en una escena tensa."
+    )
+    npc_template["superficial_damage"] = 0
+    npc_template["aggravated_damage"] = 0
+    npc_template["willpower_damage"] = 0
+
+    relationships[key] = npc_template
+    return npc_template
+
+
+def build_interaction_context(target_name, npc_profile):
+    return f"""
+[== PERSONAJE EN INTERACCION ==]
+Nombre: {target_name}
+Clan: {npc_profile.get('clan', 'Desconocido')}
+Humanidad: {npc_profile.get('humanity', 7)}/10
+Hambre: {npc_profile.get('hunger', 1)}/5
+Voluntad Max: {npc_profile.get('max_willpower', 5)}
+Situacion: {npc_profile.get('current_situation', 'Sin datos')}
+Ubicacion: {npc_profile.get('current_location', 'unknown')}
+[== FIN PERSONAJE ==]
+"""
 
 
 def load_character():
     if os.path.exists(CHARACTER_FILE):
         with open(CHARACTER_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            loaded = json.load(f)
+            return ensure_character_integrity(loaded)
     else:
-        save_character(DEFAULT_CHARACTER)
-        return DEFAULT_CHARACTER.copy()
+        generated = materialize_character_template(DEFAULT_CHARACTER)
+        generated = ensure_character_integrity(generated)
+        save_character(generated)
+        return generated
 
 
 def save_character(character):
@@ -85,6 +259,12 @@ EJEMPLOS:
 [UPDATE_LOCATION(Callejón oscuro detrás del Elíseo)]
 [UPDATE_SITUATION(Perseguido. Se oyen pasos. Alguien - o algo - te busca)]
 [SET_HUNGER(4)]
+
+## INTERACCION CON PERSONAJES (OBLIGATORIO)
+Si recibes el bloque [== PERSONAJE EN INTERACCION ==], ese perfil es canon para el PNJ de la escena.
+- Interprétalo usando esos rasgos (clan, humanidad, hambre, voluntad, situación).
+- Si el jugador vuelve a interactuar con el mismo PNJ, mantén coherencia de personalidad y agenda.
+- No contradigas el perfil salvo causa narrativa explícita.
 
 ## PROFUNDIDAD NARRATIVA REQUERIDA
 Cada respuesta debe:
@@ -383,7 +563,8 @@ def main():
 
     campaign_text = select_campaign()
 
-    character = load_character()
+    character = ensure_character_integrity(load_character(), campaign_text)
+    save_character(character)
     print_character_status(character)
 
     print("\n[INFORMACIÓN DEL MOTOR]")
@@ -412,7 +593,19 @@ def main():
         # Inyectar el estado de la ficha al principio para que el modelo lo sepa
         status_context = build_context_injection(character)
 
-        messages.append({"role": "user", "content": status_context + user_input})
+        interaction_context = ""
+        target_name = extract_interaction_target(user_input)
+        if target_name:
+            npc_profile = get_or_create_interaction_character(character, target_name, campaign_text)
+            interaction_context = build_interaction_context(target_name, npc_profile)
+            save_character(character)
+
+        messages.append(
+            {
+                "role": "user",
+                "content": status_context + interaction_context + user_input,
+            }
+        )
 
         # Obtener respuesta del Storyteller
         assistant_msg = chat_with_gemma(messages)

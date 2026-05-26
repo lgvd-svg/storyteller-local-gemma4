@@ -4,7 +4,7 @@
     "max_health": 20,
     "superficial_damage": 0,
     "aggravated_damage": 0,
-    "max_willpower": 5,
+    "max_willpower": 10,
     "willpower_damage": 0,
     "hunger": 1,
     "humanity": 7
