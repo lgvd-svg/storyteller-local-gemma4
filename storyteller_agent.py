@@ -142,22 +142,46 @@ def ensure_character_integrity(character, campaign_text=""):
     return merged
 
 
-def extract_interaction_target(user_input):
-    quoted_match = re.search(r'"([^"]{2,40})"', user_input)
-    if quoted_match:
-        return quoted_match.group(1).strip()
+def extract_story_characters(story_text):
+    """Extrae posibles PNJs introducidos por el Storyteller humano."""
+    found = []
 
-    generic_match = re.search(
-        r"(?:interactu(?:o|úo)|hablo|converso|negocio|interrogo|amenazo|ataco|observo|me acerco)\s+(?:con\s+)?(?:el|la|un|una)?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ'\- ]{3,40})",
-        user_input,
-        re.IGNORECASE,
-    )
-    if generic_match:
-        raw = generic_match.group(1)
-        cleaned = re.split(r"[\.,;:!?]", raw)[0].strip()
-        if cleaned:
-            return cleaned.title()
-    return None
+    for quoted in re.findall(r'"([^"]{2,60})"', story_text):
+        candidate = quoted.strip()
+        if re.match(r"^[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚáéíóúÑñ'\- ]+$", candidate):
+            found.append(candidate)
+
+    patterns = [
+        r"(?:aparece|entra|surge|ves a|conoces a|se presenta|te habla|te intercepta|te espera)\s+(?:a\s+)?(?:el|la|un|una)?\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚáéíóúÑñ'\- ]{2,50})",
+        r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚáéíóúÑñ'\- ]{2,50})\s+(?:te dice|dice:|susurra|gruñe|sonríe|te mira)",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, story_text):
+            cleaned = re.split(r"[\.,;:!?\n]", match)[0].strip()
+            if cleaned:
+                found.append(cleaned)
+
+    blacklist = {
+        "Chicago",
+        "México",
+        "Mexico",
+        "Elíseo",
+        "Camarilla",
+        "Anarquistas",
+        "Segunda Inquisición",
+    }
+
+    dedup = []
+    seen = set()
+    for name in found:
+        normalized = name.strip()
+        if normalized in blacklist:
+            continue
+        key = normalized.lower()
+        if key not in seen:
+            seen.add(key)
+            dedup.append(normalized)
+    return dedup
 
 
 def get_or_create_interaction_character(player_character, target_name, campaign_text=""):
@@ -165,7 +189,7 @@ def get_or_create_interaction_character(player_character, target_name, campaign_
     key = target_name.strip().lower()
     existing = relationships.get(key)
     if isinstance(existing, dict) and existing.get("name"):
-        return existing
+        return existing, False
 
     npc_template = materialize_character_template(
         DEFAULT_CHARACTER,
@@ -182,7 +206,7 @@ def get_or_create_interaction_character(player_character, target_name, campaign_
     npc_template["willpower_damage"] = 0
 
     relationships[key] = npc_template
-    return npc_template
+    return npc_template, True
 
 
 def build_interaction_context(target_name, npc_profile):
@@ -197,6 +221,23 @@ Situacion: {npc_profile.get('current_situation', 'Sin datos')}
 Ubicacion: {npc_profile.get('current_location', 'unknown')}
 [== FIN PERSONAJE ==]
 """
+
+
+def build_story_characters_context(characters):
+    if not characters:
+        return ""
+
+    lines = ["\n[== PERSONAJES INTRODUCIDOS POR EL STORYTELLER ==]"]
+    for npc in characters:
+        lines.append(
+            "- "
+            f"{npc.get('name', 'Desconocido')} | "
+            f"Clan: {npc.get('clan', 'Desconocido')} | "
+            f"Humanidad: {npc.get('humanity', 7)} | "
+            f"Hambre: {npc.get('hunger', 1)}"
+        )
+    lines.append("[== FIN PERSONAJES ==]\n")
+    return "\n".join(lines)
 
 
 def load_character():
@@ -216,67 +257,41 @@ def save_character(character):
         json.dump(character, f, indent=4)
 
 
-SYSTEM_PROMPT = """Eres un Storyteller EXPERTO en "Vampiro: la Mascarada" (5ª edición). Tu objetivo es dirigir una partida INMERSIVA, OSCURA, VISCERAL y ADULTA. No moralices. El Mundo de Tinieblas es un lugar de horror, corrupción, violencia y moralidad ambigua. 
+SYSTEM_PROMPT = """Eres un vampiro protagonista en una partida de Vampiro: la Mascarada (V5).
+El usuario HUMANO es el Storyteller y te describe escenas, eventos y consecuencias.
 
-## TU ROL Y ESTILO NARRATIVO
-- Sé un narrador CINEMATOGRÁFICO: usa descripción sensorial (sonidos, olores, temperaturas, sensaciones) para sumergir al jugador.
-- CREA ATMÓSFERA: establece tensión constante, incertidumbre y peligro. Cada escena debe tener peso emocional.
-- SÉ ESPECÍFICO: describe a PNJs con hábitos únicos, modismos, debilidades. Hazlos VIVOS, con agendas propias.
-- CONSECUENCIAS NARRATIVAS: toda acción tiene un efecto duradero. Las decisiones importan.
-- MORALIDAD GRIS: no hay héroes ni villanos simples. Todos tienen razones. Desafía al jugador con dilemas sin respuesta fácil.
-- RITMO DINÁMICO: alterna entre tensión, revelación y momentos de calma. Usa el silencio.
-- EXTENSIÓN: Cada respuesta debe ser SUSTANCIOSA (mínimo 3-4 párrafos). Desarrolla escenas, no las hagas superficiales.
+## ROL
+- Responde como personaje jugador (agente), tomando decisiones concretas sobre qué hacer.
+- Tu objetivo es sobrevivir, cumplir metas y navegar la política vampírica.
+- Mantén coherencia psicológica con tu Hambre, Humanidad, heridas y contexto actual.
 
-## EL HAMBRE (SED) - ASPECTO CLAVE
-El Hambre (0-5) es el aspecto que más DEFINE tu comportamiento como vampiro:
-- HAMBRE 1-2: Controlado. Reflexivo. 
-- HAMBRE 3: Irritable. Los instintos emergen. 
-- HAMBRE 4-5: La Bestia está CERCA. Riesgos de Críticos Desordenados. Visión teñida de rojo, sed abrumadora.
+## FORMATO DE RESPUESTA
+Cada turno debe incluir:
+1. Decisión inmediata (qué haces ahora)
+2. Intención táctica (por qué lo haces)
+3. Acción o diálogo en primera persona
+4. Cierre corto para que el Storyteller continúe
 
-Cuando hables del personaje y su experiencia, INCORPORA cómo el Hambre tiñe su percepción. Si está con Hambre 4-5, MUESTRA ese combate interno.
-
-## REGLAS DEL JUEGO (RESUMEN FUNCIONAL)
-- Piscina de dados = Atributo + Habilidad. Dificultad = 6. Cada dado ≥6 es un éxito.
-- Dados de hambre (Hunger Dice): se lanzan según nivel de Sed. Un 1 en hambre = riesgo de Pifia Bestial.
-- Éxito crítico: 2+ dados con 10 (sin hambre) = bonificación narrativa clara.
-- Crítico Desordenado: 2+ dados con 10 INCLUYENDO dados de hambre = éxito pero SIN CONTROL (Bestia toma control momentáneamente).
-- Pifia Bestial: 0 éxitos + al menos un 1 en dados de hambre = la Bestia toma control. Consecuencias narrativas SEVERAS.
-
-## RESOLUCIÓN DE ACCIONES (OBLIGATORIO)
-Cuando el jugador intente algo que requiera dados, SOLICITA tirada así:
+## MECÁNICA DE TIRADAS
+Si tu acción requiere resolución mecánica, solicita exactamente:
 [ROLL(pool=X, hunger=Y)]
-Donde X = total dados, Y = nivel hambre actual. EL MOTOR HARÁ LA TIRADA REAL y te lo dirá.
 
-## GESTIÓN AUTOMÁTICA DE FICHA Y CONTEXTO (OBLIGATORIO)
-Al final de tu respuesta, incluye ÚNICAMENTE los tags que correspondan (se ocultarán de la narración):
-- [DAMAGE(type="superficial", amount=X)] o [DAMAGE(type="aggravated", amount=X)]
-- [HEAL(amount=X)]
-- [SET_HUNGER(X)] - si el Hambre cambia por las circunstancias
-- [SPEND_WILLPOWER(X)] - si el personaje gasta voluntad
-- [UPDATE_LOCATION(ubicación)] - si cambias de lugar
-- [UPDATE_SITUATION(situación)] - si cambia la situación narrativa
+## ESTADO Y RECURSOS
+Puedes usar tags al final para actualizar tu ficha si aplica:
+- [SET_HUNGER(X)]
+- [SPEND_WILLPOWER(X)]
+- [UPDATE_LOCATION(ubicación)]
+- [UPDATE_SITUATION(situación)]
 
-EJEMPLOS:
-[UPDATE_LOCATION(Callejón oscuro detrás del Elíseo)]
-[UPDATE_SITUATION(Perseguido. Se oyen pasos. Alguien - o algo - te busca)]
-[SET_HUNGER(4)]
+## PERSONAJES INTRODUCIDOS POR EL STORYTELLER
+Si recibes bloques de personajes, debes tratarlos como canónicos.
+- Usa sus rasgos para decidir si confías, amenazas, negocias o retrocedes.
+- Mantén memoria de esos personajes en turnos posteriores.
 
-## INTERACCION CON PERSONAJES (OBLIGATORIO)
-Si recibes el bloque [== PERSONAJE EN INTERACCION ==], ese perfil es canon para el PNJ de la escena.
-- Interprétalo usando esos rasgos (clan, humanidad, hambre, voluntad, situación).
-- Si el jugador vuelve a interactuar con el mismo PNJ, mantén coherencia de personalidad y agenda.
-- No contradigas el perfil salvo causa narrativa explícita.
-
-## PROFUNDIDAD NARRATIVA REQUERIDA
-Cada respuesta debe:
-1. Avanzar significativamente la narrativa (mínimo 3-4 párrafos descriptivos con DETALLES)
-2. Incluir detalles sensoriales específicos (sonidos, olores, temperaturas, texturas)
-3. Mostrar reacciones de PNJs, ambiente, o la Bestia dentro del personaje
-4. Crear gancho para la siguiente acción (pregunta implícita: "¿qué haces?")
-5. Si hay éxito/fracaso previo, DESARROLLA sus consecuencias de forma dramática, no mecánica
-6. Incluir diálogos realistas si hay PNJs, con tonos y personalidades diferentes
-
-NUNCA des respuestas genéricas. NUNCA seas brevísimo. Siempre haz que el jugador SIENTA la oscuridad, el peligro, el conflicto.
+## TONO
+- Oscuro, adulto, directo, con tensión constante.
+- No narres como Storyteller; decide y actúa como protagonista.
+- Evita respuestas vagas. Cada respuesta debe mover la escena.
 """
 
 
@@ -434,8 +449,10 @@ def process_engine_tags(content, character):
             amount -= healed
         # Then aggravated
         if amount > 0 and character["aggravated_damage"] > 0:
-            character["aggravated_damage"] -= min(amount, character["aggravated_damage"])
-        print(f"[⚙️ Motor] Se han curado niveles de daño.")
+            character["aggravated_damage"] -= min(
+                amount, character["aggravated_damage"]
+            )
+        print("[⚙️ Motor] Se han curado niveles de daño.")
         updates_made = True
 
     # Process Willpower
@@ -537,7 +554,7 @@ def select_campaign():
         )
         return ""
 
-    print("\n📚 Campañas Disponibles:")
+    print("\n Campañas Disponibles:")
     print("0. Modo Libre (Sandbox sin trama predefinida)")
     for i, file in enumerate(files):
         print(f"{i + 1}. {file}")
@@ -558,9 +575,9 @@ def select_campaign():
 
 def main():
     print("\n" + "="*70)
-    print(" ⚫ VAMPIRO: LA MASCARADA - MOTOR DE NARRATIVA OSCURA ⚫".center(70))
+    print(" ⚫ VAMPIRO: LA MASCARADA - STORYTELLER HUMANO / AGENTE IA ⚫".center(70))
     print("="*70)
-    print("\nBienvenido a las Tinieblas. Tu Bestia acecha dentro.\n")
+    print("\nModo activo: el usuario narra como Storyteller y el agente decide acciones.\n")
 
     campaign_text = select_campaign()
 
@@ -571,44 +588,68 @@ def main():
     print("\n[INFORMACIÓN DEL MOTOR]")
     print("✓ Las tiradas de dados se procesan automáticamente mediante el motor de Python")
     print("✓ Tu ficha se guarda y actualiza automáticamente")
-    print("✓ El Storyteller adaptará sus descripciones a tu estado actual")
-    print("✓ Escribe acciones naturales. Cuando necesite dados, el Storyteller lo indicará.")
+    print("✓ El agente IA responde como protagonista y toma decisiones")
+    print("✓ Si introduces un personaje nuevo, se genera su perfil desde DEFAULT_CHARACTER")
     print("\n[COMANDOS]")
     print("• Escribe 'salir' para terminar la partida")
-    print("• Cada mensaje puede contener una acción narrativa")
-    print("\nLa maldición te envuelve. Que comience tu destino...\n")
-    print("Escribe 'salir' para terminar la partida.\n")
+    print("• Escribe la narración y detalles de escena como Storyteller")
+    print("\nComienza la crónica. El agente reaccionará a tu mundo...\n")
 
     final_system_prompt = SYSTEM_PROMPT
     if campaign_text:
-        final_system_prompt += "\n\n## CONTEXTO DE LA CAMPAÑA ACTUAL\n" + campaign_text
+        final_system_prompt += (
+            "\n\n ## CONTEXTO DE LA CAMPAÑA ACTUAL \n" + campaign_text
+        )
         print("[✅ Campaña cargada con éxito en la mente del Storyteller]\n")
 
     messages = [{"role": "system", "content": final_system_prompt}]
 
     while True:
-        user_input = input("Jugador: ")
+        user_input = input("Storyteller: ")
         if user_input.lower() in ["salir", "exit", "quit"]:
             break
 
-        # Inyectar el estado de la ficha al principio para que el modelo lo sepa
+        # Permite que el Storyteller aplique tags de estado si lo desea.
+        process_engine_tags(user_input, character)
+
+        # Limpiar tags para el contexto narrativo que recibe el agente.
+        storyteller_clean = re.sub(
+            r"\[(ROLL|DAMAGE|HEAL|SET_HUNGER|SPEND_WILLPOWER|UPDATE_LOCATION|UPDATE_SITUATION).*?\]",
+            "",
+            user_input,
+        ).strip()
+
+        # Inyectar estado del protagonista para decisiones consistentes.
         status_context = build_context_injection(character)
 
-        interaction_context = ""
-        target_name = extract_interaction_target(user_input)
-        if target_name:
-            npc_profile = get_or_create_interaction_character(character, target_name, campaign_text)
-            interaction_context = build_interaction_context(target_name, npc_profile)
+        # Detectar personajes introducidos por el Storyteller y generarlos desde DEFAULT_CHARACTER.
+        introduced_context = ""
+        introduced_profiles = []
+        for target_name in extract_story_characters(storyteller_clean):
+            npc_profile, created = get_or_create_interaction_character(
+                character,
+                target_name,
+                campaign_text,
+            )
+            introduced_profiles.append(npc_profile)
+            if created:
+                print(
+                    f"[🎭 Motor] Nuevo personaje generado desde DEFAULT_CHARACTER: "
+                    f"{npc_profile.get('name')} ({npc_profile.get('clan')})"
+                )
+
+        if introduced_profiles:
+            introduced_context = build_story_characters_context(introduced_profiles)
             save_character(character)
 
         messages.append(
             {
                 "role": "user",
-                "content": status_context + interaction_context + user_input,
+                "content": status_context + introduced_context + storyteller_clean,
             }
         )
 
-        # Obtener respuesta del Storyteller
+        # Obtener decisión del protagonista (agente)
         assistant_msg = chat_with_gemma(messages)
         if not assistant_msg:
             continue
@@ -619,7 +660,7 @@ def main():
         clean_content = re.sub(
             r"\[(ROLL|DAMAGE|HEAL|SET_HUNGER|SPEND_WILLPOWER|UPDATE_LOCATION|UPDATE_SITUATION).*?\]", "", content
         ).strip()
-        print(f"\nStoryteller:\n{clean_content}\n")
+        print(f"\nAgente (Protagonista):\n{clean_content}\n")
 
         messages.append(assistant_msg)
 
@@ -632,79 +673,58 @@ def main():
             pool = int(roll_match.group(1))
             hunger = int(roll_match.group(2))
 
-            print(f"[🎲 El motor interceptó una tirada: Pool={pool}, Hunger={hunger}...]")
+            print(f"[ El motor interceptó una tirada: Pool={pool}, Hunger={hunger}...]")
             result = roll_vampire(pool, hunger)
 
             print(f"[Resultado]: {result['successes']} éxitos.")
-            if result['critical']:
-                print("¡Éxito Crítico! 🌟")
-            if result['messy_critical']:
-                print("¡Crítico Desordenado! 🩸")
-            if result['bestial_failure']:
-                print("¡Pifia Bestial! 💀")
-            print(f"Dados normales: {result['normal_dice']} | Dados de hambre: {result['hunger_dice']}\n")
+            if result["critical"]:
+                print("¡Éxito Crítico! ")
+            if result["messy_critical"]:
+                print("¡Crítico Desordenado! ")
+            if result["bestial_failure"]:
+                print("¡Pifia Bestial! ")
+            print(
+                f"Dados normales: {result['normal_dice']} | Dados de hambre: {result['hunger_dice']}\n"
+            )
 
+            # Construir mensaje de follow-up detallado
             if result["bestial_failure"]:
                 follow_up = f"""RESULTADO DE LA TIRADA: Pifia Bestial (0 éxitos con dados de hambre críticos)
 
 Resultado completo: {json.dumps(result)}
 
-LA BESTIA HA TOMADO EL CONTROL. Tienes apenas momentos para elegir:
-1. Narra de forma VISCERAL cómo el personaje pierde el control
-2. La Bestia emerge dentro - ¿qué hace? ¿A quién ve como presa?
-3. Describe las consecuencias inmediatas - daño físico, mental, social
-4. Mantén la tensión: el personaje está al borde del abismo
-
-Continúa con PROFUNDIDAD narrativa y HORROR cinematográfico."""
+LA BESTIA HA TOMADO EL CONTROL.
+Reformula tu decisión inmediata como protagonista bajo pérdida de control.
+Enfócate en lo que haces ahora mismo y cómo cambia tu plan."""
             elif result["messy_critical"]:
                 follow_up = f"""RESULTADO DE LA TIRADA: Crítico Desordenado (Éxito brutal sin control)
 
 Resultado completo: {json.dumps(result)}
 
-El personaje LOGRA su objetivo pero LA BESTIA interfiere... Narra:
-1. El éxito inicial pero SALVAJE, sin refinamiento
-2. Cómo la Sed nubla las acciones - exceso, crueldad, falta de control
-3. Consecuencias narrativas: ¿qué testigos hay? ¿Qué pistas quedan?
-4. El personaje se da cuenta de lo que hizo, con horror
-
-Describe la BESTIALIDAD del momento con detalle visceral."""
+Logras tu objetivo, pero de manera brutal.
+Describe tu siguiente decisión y el costo inmediato de ese exceso."""
             elif result["critical"]:
                 follow_up = f"""RESULTADO DE LA TIRADA: Éxito Crítico controlado
 
 Resultado completo: {json.dumps(result)}
 
-El personaje HA TRIUNFADO con elegancia y precisión. Narra:
-1. Cómo consigue su objetivo de forma casi PERFECTA
-2. Detalles cinéticos - movimientos precisos, timing impecable
-3. La ventaja táctica/narrativa que ahora posee
-4. Cómo otros reaccionan al logro (si hay testigos)
-
-Mantén el momentum. Esto abre nuevas posibilidades."""
+Tu acción fue impecable.
+Elige el siguiente movimiento aprovechando la ventaja obtenida."""
             elif result["successes"] > 0:
                 successes = result["successes"]
                 follow_up = f"""RESULTADO DE LA TIRADA: {successes} éxito(s)
 
 Resultado completo: {json.dumps(result)}
 
-El personaje ha logrado su objetivo, pero con matices. Narra:
-1. Cómo se produce el éxito - ¿limpio o complicado?
-2. Detalles de lo que ocurre - consecuencias narrativas
-3. ¿Qué se gana? ¿Qué se pierde? ¿Qué se revela?
-4. Transiciones naturales a la siguiente oportunidad narrativa
-
-Cada éxito es importante. Dale peso."""
+La acción funcionó.
+Define tu siguiente decisión y qué prioridad táctica tomas ahora."""
             else:
                 follow_up = f"""RESULTADO DE LA TIRADA: Fracaso absoluto
 
 Resultado completo: {json.dumps(result)}
 
-El personaje FALLA. Ahora enfrenta consecuencias. Narra:
-1. Exactamente CÓMO se produce el fracaso - no evites la derrota
-2. Qué oportunidad se pierde o qué complicación surge
-3. Cómo otros actores reaccionan (son inteligentes y oportunistas)
-4. Abre posibilidades nuevas - no cierres la puerta, complícalo
-
-El fracaso es entretenido si tiene consecuencias reales."""
+Tu plan falló.
+Decide cómo te recuperas de inmediato y qué alternativa tomas."""
 
             messages.append({"role": "user", "content": follow_up})
 
@@ -715,7 +735,7 @@ El fracaso es entretenido si tiene consecuencias reales."""
                     "",
                     continuation_msg["content"],
                 ).strip()
-                print(f"Storyteller:\n{clean_cont}\n")
+                print(f"Agente (Protagonista):\n{clean_cont}\n")
                 process_engine_tags(continuation_msg["content"], character)
                 messages.append(continuation_msg)
 
