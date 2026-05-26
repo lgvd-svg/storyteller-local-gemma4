@@ -1,0 +1,11 @@
+{
+    "name": "Romu Val",
+    "clan": "Desconocido",
+    "max_health": 20,
+    "superficial_damage": 0,
+    "aggravated_damage": 0,
+    "max_willpower": 5,
+    "willpower_damage": 0,
+    "hunger": 1,
+    "humanity": 7
+}
