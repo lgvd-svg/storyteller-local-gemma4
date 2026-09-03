@@ -336,7 +336,7 @@ def roll_vampire(pool, hunger):
     }
 
 
-def chat_with_gemma(messages, model="gemma4:latest"):  # gemma4:latest lfm2.5-thinking
+def chat_with_gemma(messages, model="gemma4:31b-cloud"):  # gemma4:latest lfm2.5-thinking
     url = "http://localhost:11434/api/chat"
     data = {"model": model, "messages": messages, "stream": False}
     try:

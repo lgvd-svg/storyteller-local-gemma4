@@ -1,11 +1,17 @@
 {
     "name": "Romu Val",
-    "clan": "Desconocido",
+    "clan": "Tremere",
     "max_health": 20,
     "superficial_damage": 0,
     "aggravated_damage": 0,
     "max_willpower": 10,
     "willpower_damage": 0,
-    "hunger": 1,
-    "humanity": 7
+    "hunger": 0,
+    "humanity": 7,
+    "objectives": [],
+    "secrets": [],
+    "relationships": {},
+    "current_location": "Patio trasero / Calle adyacente",
+    "current_situation": "Hambre saciada / Regresando con Vlad",
+    "narrative_history": []
 }
